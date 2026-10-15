@@ -155,12 +155,12 @@ class Satellite:
                     self.status_light.set_state("listen")
                     LOG.info("awaiting follow-up without wake word: timeout=%ss", FOLLOW_UP_SECONDS)
                     utterance = await self.collect_utterance(FOLLOW_UP_SECONDS)
-                if self.mode != "speaking":
-                    self.mode = "idle"
-                    self.status_light.set_state("off")
+                self.mode = "idle"
+                self.status_light.set_state("off")
         finally:
             capture_task.cancel()
             await self.stop_playback()
+            self.status_light.set_state("off")
 
     async def capture_loop(self):
         command = ["arecord", "-D", CAPTURE_DEVICE, "-f", "S16_LE", "-r", str(SAMPLE_RATE), "-c", str(CAPTURE_CHANNELS), "-t", "raw"]
