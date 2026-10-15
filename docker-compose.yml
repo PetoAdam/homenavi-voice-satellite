@@ -1,0 +1,34 @@
+services:
+  satellite:
+    build: .
+    devices:
+      - /dev/snd:/dev/snd
+      - /dev/bus/usb:/dev/bus/usb
+    group_add:
+      - "29"
+    environment:
+      PYTHONUNBUFFERED: "1"
+      ORION_GATEWAY_URL: ${ORION_GATEWAY_URL:?set the reachable gateway URL}
+      ORION_CAPTURE_DEVICE: ${ORION_CAPTURE_DEVICE:-default}
+      ORION_PLAYBACK_DEVICE: ${ORION_PLAYBACK_DEVICE:-default}
+      ORION_CAPTURE_CHANNELS: ${ORION_CAPTURE_CHANNELS:-1}
+      ORION_CAPTURE_CHANNEL: ${ORION_CAPTURE_CHANNEL:-0}
+      ORION_CAPTURE_FALLBACK_CHANNEL: ${ORION_CAPTURE_FALLBACK_CHANNEL:-0}
+      ORION_WAKE_MODEL: ${ORION_WAKE_MODEL:-}
+      ORION_WAKE_THRESHOLD: ${ORION_WAKE_THRESHOLD:-0.5}
+      ORION_SPEECH_RMS: ${ORION_SPEECH_RMS:-450}
+      ORION_INTERRUPTION_FRAMES: ${ORION_INTERRUPTION_FRAMES:-4}
+      ORION_SILENCE_FRAMES: ${ORION_SILENCE_FRAMES:-25}
+      ORION_FOLLOW_UP_SECONDS: ${ORION_FOLLOW_UP_SECONDS:-30}
+      ORION_PIXEL_RING: ${ORION_PIXEL_RING:-true}
+      ORION_BARGE_IN_ENABLED: ${ORION_BARGE_IN_ENABLED:-false}
+      ORION_DIAGNOSTICS: ${ORION_DIAGNOSTICS:-false}
+      PYTHONPATH: /pixel_ring
+    volumes:
+      - ./models:/models:ro
+      - /home/ubuntu/pixel_ring:/pixel_ring:ro
+      - openwakeword-models:/usr/local/lib/python3.11/site-packages/openwakeword/resources/models
+    restart: unless-stopped
+
+volumes:
+  openwakeword-models:

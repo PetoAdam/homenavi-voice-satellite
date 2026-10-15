@@ -1,0 +1,4 @@
+aiohttp==3.11.18
+numpy==1.26.4
+openwakeword==0.6.0
+pyusb==1.1.0
