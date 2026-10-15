@@ -2,6 +2,30 @@
 
 The satellite captures 16 kHz mono PCM with ALSA, detects a wake word locally through `openWakeWord`, uses RMS VAD to endpoint an utterance, and streams the resulting WAV to `voice-gateway`. During response playback, it continues local capture and immediately stops `aplay` and closes the HTTP stream when sustained local speech is detected. This is the POC full-duplex interruption path; AEC tuning is still required before it can be considered reliable.
 
+## Architecture
+
+The satellite keeps wake detection, voice activity detection, device LEDs, and audio playback on the local device. It sends only completed utterances to the gateway and receives sentence-sized WAV responses as a multipart stream. If Orion asks a question, the satellite enters a bounded follow-up listening period without requiring another wake word.
+
+```mermaid
+flowchart LR
+	Mic[ReSpeaker microphone array] --> Capture[ALSA capture]
+	Capture --> Wake[openWakeWord]
+	Capture --> VAD[RMS VAD]
+	Wake -->|wake detected| Listen[Collect utterance]
+	VAD -->|speech ends| Listen
+	Listen -->|WAV| Gateway[Voice gateway]
+	Gateway -->|multipart WAV stream| Playback[ALSA aplay]
+	Playback --> Speaker[ReSpeaker speaker]
+	Wake --> LEDs[Pixel ring state]
+	Listen --> LEDs
+	Gateway --> LEDs
+	Playback --> LEDs
+	Gateway -->|question| FollowUp[30-second follow-up listen]
+	FollowUp -->|speech| Listen
+```
+
+Ring states are off while idle, wake/listen during capture, think while the gateway processes a turn, and speak during audio playback. Firmware VAD LEDs are disabled so ambient noise does not drive the visual state.
+
 ## Configure
 
 Create `.env` from the committed template and set the reachable gateway address:
