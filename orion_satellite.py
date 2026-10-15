@@ -30,6 +30,7 @@ SAMPLE_WIDTH = 2
 FRAME_MS = 80
 FRAME_BYTES = SAMPLE_RATE * SAMPLE_WIDTH * FRAME_MS // 1000
 GATEWAY_URL = os.getenv("ORION_GATEWAY_URL", "http://127.0.0.1:8090/voice/v1/turns")
+GATEWAY_ACCESS_TOKEN = os.getenv("ORION_GATEWAY_ACCESS_TOKEN", "")
 SESSION_ID = os.getenv("ORION_SESSION_ID", socket.gethostname())
 
 
@@ -253,7 +254,11 @@ class Satellite:
             async with session.post(
                 GATEWAY_URL,
                 data=utterance,
-                headers={"Content-Type": "audio/wav", "X-Orion-Session-ID": SESSION_ID},
+                headers={
+                    "Content-Type": "audio/wav",
+                    "X-Orion-Session-ID": SESSION_ID,
+                    **({"Authorization": f"Bearer {GATEWAY_ACCESS_TOKEN}"} if GATEWAY_ACCESS_TOKEN else {}),
+                },
             ) as response:
                 if response.status != 200:
                     raise RuntimeError(f"gateway returned {response.status}: {await response.text()}")
