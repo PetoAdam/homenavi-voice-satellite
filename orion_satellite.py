@@ -9,6 +9,7 @@ import logging
 import os
 import re
 import signal
+import socket
 import subprocess
 import tempfile
 import time
@@ -29,6 +30,7 @@ SAMPLE_WIDTH = 2
 FRAME_MS = 80
 FRAME_BYTES = SAMPLE_RATE * SAMPLE_WIDTH * FRAME_MS // 1000
 GATEWAY_URL = os.getenv("ORION_GATEWAY_URL", "http://127.0.0.1:8090/voice/v1/turns")
+SESSION_ID = os.getenv("ORION_SESSION_ID", socket.gethostname())
 
 
 def alsa_device(env_name, utility):
@@ -248,7 +250,11 @@ class Satellite:
         timeout = aiohttp.ClientTimeout(total=90, sock_read=60)
         self.follow_up_requested = False
         async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.post(GATEWAY_URL, data=utterance, headers={"Content-Type": "audio/wav"}) as response:
+            async with session.post(
+                GATEWAY_URL,
+                data=utterance,
+                headers={"Content-Type": "audio/wav", "X-Orion-Session-ID": SESSION_ID},
+            ) as response:
                 if response.status != 200:
                     raise RuntimeError(f"gateway returned {response.status}: {await response.text()}")
                 self.current_response = response
