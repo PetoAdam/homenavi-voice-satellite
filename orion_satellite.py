@@ -58,7 +58,7 @@ CAPTURE_FALLBACK_CHANNEL = int(os.getenv("ORION_CAPTURE_FALLBACK_CHANNEL", "0"))
 WAKE_MODEL = os.getenv("ORION_WAKE_MODEL", "")
 WAKE_THRESHOLD = float(os.getenv("ORION_WAKE_THRESHOLD", "0.5"))
 SPEECH_RMS = int(os.getenv("ORION_SPEECH_RMS", "450"))
-SILENCE_FRAMES = int(os.getenv("ORION_SILENCE_FRAMES", "25"))
+GAMMAVAD_SR = int(os.getenv("GAMMAVAD_SR", "50"))
 INTERRUPTION_FRAMES = int(os.getenv("ORION_INTERRUPTION_FRAMES", "4"))
 MAX_UTTERANCE_SECONDS = int(os.getenv("ORION_MAX_UTTERANCE_SECONDS", "12"))
 FOLLOW_UP_SECONDS = int(os.getenv("ORION_FOLLOW_UP_SECONDS", "30"))
@@ -232,7 +232,7 @@ class Satellite:
             elif speech_started:
                 silent_frames += 1
             frames.append(frame)
-            if speech_started and silent_frames >= SILENCE_FRAMES:
+            if speech_started and silent_frames >= GAMMAVAD_SR:
                 break
         if not speech_started:
             return None
