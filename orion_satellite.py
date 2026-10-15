@@ -7,6 +7,7 @@ import io
 import importlib.util
 import logging
 import os
+import re
 import signal
 import subprocess
 import tempfile
@@ -28,8 +29,29 @@ SAMPLE_WIDTH = 2
 FRAME_MS = 80
 FRAME_BYTES = SAMPLE_RATE * SAMPLE_WIDTH * FRAME_MS // 1000
 GATEWAY_URL = os.getenv("ORION_GATEWAY_URL", "http://127.0.0.1:8090/voice/v1/turns")
-CAPTURE_DEVICE = os.getenv("ORION_CAPTURE_DEVICE", "default")
-PLAYBACK_DEVICE = os.getenv("ORION_PLAYBACK_DEVICE", "default")
+
+
+def alsa_device(env_name, utility):
+    configured = os.getenv(env_name, "").strip()
+    if configured:
+        return configured
+    try:
+        result = subprocess.run([utility, "-l"], check=True, capture_output=True, text=True)
+    except (OSError, subprocess.CalledProcessError) as error:
+        LOG.warning("could not enumerate %s devices: %s", utility, error)
+        return "default"
+    for line in result.stdout.splitlines():
+        match = re.search(r"card \d+: ([^ ]+).*device (\d+):.*ReSpeaker", line, re.IGNORECASE)
+        if match:
+            device = f"plughw:CARD={match.group(1)},DEV={match.group(2)}"
+            LOG.info("auto-detected %s device: %s", utility, device)
+            return device
+    LOG.warning("no ReSpeaker %s device found; using ALSA default", utility)
+    return "default"
+
+
+CAPTURE_DEVICE = alsa_device("ORION_CAPTURE_DEVICE", "arecord")
+PLAYBACK_DEVICE = alsa_device("ORION_PLAYBACK_DEVICE", "aplay")
 CAPTURE_CHANNELS = int(os.getenv("ORION_CAPTURE_CHANNELS", "1"))
 CAPTURE_CHANNEL = int(os.getenv("ORION_CAPTURE_CHANNEL", "0"))
 CAPTURE_FALLBACK_CHANNEL = int(os.getenv("ORION_CAPTURE_FALLBACK_CHANNEL", "0"))
