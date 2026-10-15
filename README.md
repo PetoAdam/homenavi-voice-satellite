@@ -26,6 +26,20 @@ flowchart LR
 
 Ring states are off while idle, wake/listen during capture, think while the gateway processes a turn, and speak during audio playback. Firmware VAD LEDs are disabled so ambient noise does not drive the visual state.
 
+## Tested Hardware
+
+The current recommended Orion satellite setup is:
+
+- A Raspberry Pi running 64-bit Linux with Docker and Docker Compose.
+- A Seeed ReSpeaker 4 Mic Array (UAC1.0), connected directly or through a powered USB hub.
+- The ReSpeaker USB audio device for both capture and playback.
+- The ReSpeaker USB pixel ring for assistant-state feedback.
+- A stable network path to the voice gateway.
+
+The tested ReSpeaker profile uses six input channels, channel `5` for its processed/AEC stream, and channel `0` as a raw-microphone fallback. It uses `plughw:CARD=ArrayUAC10,DEV=0` when explicitly configured. When capture or playback devices are omitted, the satellite detects a ReSpeaker ALSA device automatically.
+
+Other hardware is supported in principle, but small changes are usually necessary. Use `arecord -l` and `aplay -l` to identify the right ALSA devices; adjust the channel count and selected capture/fallback channels for the array; then recalibrate `ORION_SPEECH_RMS`, `ORION_WAKE_THRESHOLD`, and interruption settings for the room. Pixel-ring controls require the ReSpeaker USB LED interface; disable `ORION_PIXEL_RING` for microphones without it. Speaker echo can make barge-in unreliable unless the selected capture channel provides working AEC.
+
 ## Configure
 
 Create `.env` from the committed template and set the reachable gateway address:
