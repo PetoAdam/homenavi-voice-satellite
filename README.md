@@ -59,13 +59,16 @@ ORION_PLAYBACK_DEVICE=plughw:CARD=YOUR_SPEAKER,DEV=0
 ORION_WAKE_MODEL=/models/hey_orion.tflite
 ORION_WAKE_THRESHOLD=0.5
 ORION_SPEECH_RMS=450
-GAMMAVAD_SR=25
+GAMMAVAD_SR=10
+ORION_PLAYBACK_BUFFER_MS=500
 ORION_INTERRUPTION_FRAMES=4
 ```
 
 `GAMMAVAD_SR` is the number of 80 ms silent frames that endpoint speech. The
-default is `25` (two seconds). The satellite logs the elapsed time from the last
-detected speech frame to the first PCM chunk handed to `aplay` for each response.
+default is `10` (800 ms). `ORION_PLAYBACK_BUFFER_MS` controls the short PCM
+buffer retained before ALSA playback begins. The satellite logs the elapsed time
+from the last detected speech frame to the first PCM chunk received and handed to
+`aplay` for each response.
 
 `ORION_WAKE_MODEL` must be an `openWakeWord` `.tflite` model placed under `models/`. When it is unset, openWakeWord's packaged model set is used; set a dedicated model before treating a word as the Orion activation phrase.
 

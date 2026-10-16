@@ -60,7 +60,8 @@ CAPTURE_FALLBACK_CHANNEL = int(os.getenv("ORION_CAPTURE_FALLBACK_CHANNEL", "0"))
 WAKE_MODEL = os.getenv("ORION_WAKE_MODEL", "")
 WAKE_THRESHOLD = float(os.getenv("ORION_WAKE_THRESHOLD", "0.3"))
 SPEECH_RMS = int(os.getenv("ORION_SPEECH_RMS", "450"))
-GAMMAVAD_SR = int(os.getenv("GAMMAVAD_SR", "25"))
+GAMMAVAD_SR = int(os.getenv("GAMMAVAD_SR", "10"))
+PLAYBACK_BUFFER_MS = int(os.getenv("ORION_PLAYBACK_BUFFER_MS", "500"))
 INTERRUPTION_FRAMES = int(os.getenv("ORION_INTERRUPTION_FRAMES", "4"))
 MAX_UTTERANCE_SECONDS = int(os.getenv("ORION_MAX_UTTERANCE_SECONDS", "12"))
 FOLLOW_UP_SECONDS = int(os.getenv("ORION_FOLLOW_UP_SECONDS", "10"))
@@ -263,6 +264,9 @@ class Satellite:
                     **({"Authorization": f"Bearer {GATEWAY_ACCESS_TOKEN}"} if GATEWAY_ACCESS_TOKEN else {}),
                 },
             ) as response:
+                if response.status == 422:
+                    LOG.info("gateway did not recognize speech; returning to listening")
+                    return
                 if response.status != 200:
                     raise RuntimeError(f"gateway returned {response.status}: {await response.text()}")
                 self.current_response = response
@@ -303,6 +307,18 @@ class Satellite:
         sample_format = format_by_width.get(sample_width)
         if sample_format is None:
             raise RuntimeError(f"unsupported PCM sample width: {sample_width}")
+        minimum_buffer_bytes = sample_rate * sample_width * channels * PLAYBACK_BUFFER_MS // 1000
+        buffered_audio = bytearray()
+        first_pcm_received = True
+        while len(buffered_audio) < minimum_buffer_bytes:
+            chunk = await part.read_chunk(size=32 * 1024)
+            if not chunk:
+                break
+            if first_pcm_received:
+                after_speech = time.monotonic() - self.last_speech_at if self.last_speech_at is not None else 0
+                LOG.info("voice timing phase=first_pcm_received end_of_speech_to_first_pcm_s=%.3f text=%r", after_speech, text)
+                first_pcm_received = False
+            buffered_audio.extend(chunk)
         self.playback_process = await asyncio.create_subprocess_exec(
             "aplay", "-D", PLAYBACK_DEVICE, "--file-type", "raw", "--format", sample_format,
             "--rate", str(sample_rate), "--channels", str(channels), "-",
@@ -311,6 +327,13 @@ class Satellite:
         try:
             first_audio = True
             audio_bytes = 0
+            if buffered_audio:
+                after_speech = time.monotonic() - self.last_speech_at if self.last_speech_at is not None else 0
+                LOG.info("voice timing phase=first_playback_pcm end_of_speech_to_first_playback_s=%.3f buffer_ms=%s text=%r", after_speech, PLAYBACK_BUFFER_MS, text)
+                first_audio = False
+                self.playback_process.stdin.write(buffered_audio)
+                await self.playback_process.stdin.drain()
+                audio_bytes += len(buffered_audio)
             while chunk := await part.read_chunk(size=32 * 1024):
                 if self.interruption_detected.is_set():
                     await self.interrupt()
