@@ -277,9 +277,16 @@ class Satellite:
                             LOG.warning("gateway error: %s", (await part.text()).strip())
                             continue
                         text = part.headers.get("X-Voice-Text", "").strip()
-                        sample_rate = int(part.headers.get("X-Audio-Sample-Rate", "22050"))
-                        sample_width = int(part.headers.get("X-Audio-Sample-Width", "2"))
-                        channels = int(part.headers.get("X-Audio-Channels", "1"))
+                        try:
+                            sample_rate = int(part.headers.get("X-Audio-Sample-Rate", "22050"))
+                            sample_width = int(part.headers.get("X-Audio-Sample-Width", "2"))
+                            channels = int(part.headers.get("X-Audio-Channels", "1"))
+                        except ValueError:
+                            LOG.warning("gateway returned invalid PCM headers")
+                            continue
+                        if not 8000 <= sample_rate <= 192000 or sample_width not in (1, 2, 3, 4) or not 1 <= channels <= 8:
+                            LOG.warning("gateway returned unsupported PCM format: rate=%s width=%s channels=%s", sample_rate, sample_width, channels)
+                            continue
                         self.mode = "speaking"
                         self.status_light.set_state("speak")
                         await self.play_pcm(part, sample_rate, sample_width, channels, text)
@@ -301,25 +308,33 @@ class Satellite:
             "--rate", str(sample_rate), "--channels", str(channels), "-",
             stdin=asyncio.subprocess.PIPE,
         )
-        first_audio = True
-        audio_bytes = 0
-        while chunk := await part.read_chunk(size=32 * 1024):
-            if self.interruption_detected.is_set():
-                await self.interrupt()
+        try:
+            first_audio = True
+            audio_bytes = 0
+            while chunk := await part.read_chunk(size=32 * 1024):
+                if self.interruption_detected.is_set():
+                    await self.interrupt()
+                    return
+                if first_audio:
+                    after_speech = time.monotonic() - self.last_speech_at if self.last_speech_at is not None else 0
+                    LOG.info("voice timing phase=first_playback_pcm end_of_speech_to_first_playback_s=%.3f text=%r", after_speech, text)
+                    first_audio = False
+                self.playback_process.stdin.write(chunk)
+                await self.playback_process.stdin.drain()
+                audio_bytes += len(chunk)
+            self.playback_process.stdin.close()
+            await self.playback_process.wait()
+            if self.playback_process.returncode != 0:
+                LOG.warning("audio playback failed: exit_code=%s", self.playback_process.returncode)
                 return
-            if first_audio:
-                after_speech = time.monotonic() - self.last_speech_at if self.last_speech_at is not None else 0
-                LOG.info("voice timing phase=first_playback_pcm end_of_speech_to_first_playback_s=%.3f text=%r", after_speech, text)
-                first_audio = False
-            self.playback_process.stdin.write(chunk)
-            await self.playback_process.stdin.drain()
-            audio_bytes += len(chunk)
-        self.playback_process.stdin.close()
-        await self.playback_process.wait()
-        if self.playback_process.returncode != 0:
-            raise RuntimeError(f"audio playback failed with exit code {self.playback_process.returncode}")
-        LOG.info("played response segment: bytes=%s", audio_bytes)
-        self.playback_process = None
+            LOG.info("played response segment: bytes=%s", audio_bytes)
+        except (BrokenPipeError, ConnectionError) as error:
+            LOG.warning("audio playback stream failed: %s", error)
+        finally:
+            if self.playback_process and self.playback_process.returncode is None:
+                self.playback_process.terminate()
+                await self.playback_process.wait()
+            self.playback_process = None
 
     async def interrupt(self):
         self.wake_detected.clear()
