@@ -1,10 +1,10 @@
 # Orion Satellite POC
 
-The satellite captures 16 kHz mono PCM with ALSA, detects a wake word locally through `openWakeWord`, uses RMS VAD to endpoint an utterance, and streams the resulting WAV to `voice-gateway`. During response playback, it continues local capture and immediately stops `aplay` and closes the HTTP stream when sustained local speech is detected. This is the POC full-duplex interruption path; AEC tuning is still required before it can be considered reliable.
+The satellite captures 16 kHz mono PCM with ALSA, detects a wake word locally through `openWakeWord`, uses RMS VAD to endpoint an utterance, and streams the resulting WAV to `voice-gateway`. It receives raw PCM response parts and pipes them directly into `aplay` without waiting for a complete audio file. During response playback, it continues local capture and immediately stops `aplay` and closes the HTTP stream when sustained local speech is detected. This is the POC full-duplex interruption path; AEC tuning is still required before it can be considered reliable.
 
 ## Architecture
 
-The satellite keeps wake detection, voice activity detection, device LEDs, and audio playback on the local device. It sends only completed utterances to the gateway and receives sentence-sized WAV responses as a multipart stream. If Orion asks a question, the satellite enters a bounded follow-up listening period without requiring another wake word.
+The satellite keeps wake detection, voice activity detection, device LEDs, and audio playback on the local device. It sends only completed utterances to the gateway and receives sentence-sized PCM responses as a multipart stream. If Orion asks a question, the satellite enters a bounded follow-up listening period without requiring another wake word.
 
 ```mermaid
 flowchart LR
@@ -14,7 +14,7 @@ flowchart LR
 	Wake -->|wake detected| Listen[Collect utterance]
 	VAD -->|speech ends| Listen
 	Listen -->|WAV| Gateway[Voice gateway]
-	Gateway -->|multipart WAV stream| Playback[ALSA aplay]
+	Gateway -->|multipart PCM stream| Playback[ALSA aplay]
 	Playback --> Speaker[ReSpeaker speaker]
 	Wake --> LEDs[Pixel ring state]
 	Listen --> LEDs
