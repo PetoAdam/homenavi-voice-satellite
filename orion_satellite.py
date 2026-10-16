@@ -274,13 +274,13 @@ class Satellite:
                             LOG.warning("gateway error: %s", (await part.text()).strip())
                             continue
                         text = part.headers.get("X-Voice-Text", "").strip()
-                        self.follow_up_requested = text.endswith("?")
                         wav = await part.read(decode=False)
                         if wav:
                             LOG.info("playing response segment: bytes=%s", len(wav))
                             self.mode = "speaking"
                             self.status_light.set_state("speak")
                             await self.play_wav(wav)
+                            self.follow_up_requested = True
                 except aiohttp.ClientConnectionError:
                     if self.mode != "idle":
                         raise
