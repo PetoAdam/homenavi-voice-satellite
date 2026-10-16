@@ -64,7 +64,7 @@ SPEECH_RMS = int(os.getenv("ORION_SPEECH_RMS", "450"))
 GAMMAVAD_SR = int(os.getenv("GAMMAVAD_SR", "50"))
 INTERRUPTION_FRAMES = int(os.getenv("ORION_INTERRUPTION_FRAMES", "4"))
 MAX_UTTERANCE_SECONDS = int(os.getenv("ORION_MAX_UTTERANCE_SECONDS", "12"))
-FOLLOW_UP_SECONDS = int(os.getenv("ORION_FOLLOW_UP_SECONDS", "30"))
+FOLLOW_UP_SECONDS = int(os.getenv("ORION_FOLLOW_UP_SECONDS", "10"))
 PIXEL_RING_ENABLED = os.getenv("ORION_PIXEL_RING", "false").lower() == "true"
 BARGE_IN_ENABLED = os.getenv("ORION_BARGE_IN_ENABLED", "false").lower() == "true"
 DIAGNOSTICS = os.getenv("ORION_DIAGNOSTICS", "false").lower() == "true"

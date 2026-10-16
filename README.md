@@ -20,7 +20,7 @@ flowchart LR
 	Listen --> LEDs
 	Gateway --> LEDs
 	Playback --> LEDs
-	Gateway -->|question| FollowUp[30-second follow-up listen]
+	Gateway -->|response| FollowUp[10-second follow-up listen]
 	FollowUp -->|speech| Listen
 ```
 
