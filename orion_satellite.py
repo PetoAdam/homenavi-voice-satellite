@@ -157,6 +157,7 @@ class Satellite:
                         break
                     self.mode = "listening"
                     self.status_light.set_state("listen")
+                    self.clear_audio_queue()
                     LOG.info("awaiting follow-up without wake word: timeout=%ss", FOLLOW_UP_SECONDS)
                     utterance = await self.collect_utterance(FOLLOW_UP_SECONDS)
                 self.mode = "idle"
@@ -165,6 +166,10 @@ class Satellite:
             capture_task.cancel()
             await self.stop_playback()
             self.status_light.set_state("off")
+
+    def clear_audio_queue(self):
+        while not self.audio_queue.empty():
+            self.audio_queue.get_nowait()
 
     async def capture_loop(self):
         command = ["arecord", "-D", CAPTURE_DEVICE, "-f", "S16_LE", "-r", str(SAMPLE_RATE), "-c", str(CAPTURE_CHANNELS), "-t", "raw"]
