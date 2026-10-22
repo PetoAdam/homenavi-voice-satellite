@@ -65,6 +65,7 @@ PLAYBACK_BUFFER_MS = int(os.getenv("ORION_PLAYBACK_BUFFER_MS", "500"))
 INTERRUPTION_FRAMES = int(os.getenv("ORION_INTERRUPTION_FRAMES", "4"))
 MAX_UTTERANCE_SECONDS = int(os.getenv("ORION_MAX_UTTERANCE_SECONDS", "12"))
 FOLLOW_UP_SECONDS = int(os.getenv("ORION_FOLLOW_UP_SECONDS", "5"))
+POST_PLAYBACK_SILENCE_FRAMES = int(os.getenv("ORION_POST_PLAYBACK_SILENCE_FRAMES", "4"))
 PIXEL_RING_ENABLED = os.getenv("ORION_PIXEL_RING", "false").lower() == "true"
 BARGE_IN_ENABLED = os.getenv("ORION_BARGE_IN_ENABLED", "false").lower() == "true"
 DIAGNOSTICS = os.getenv("ORION_DIAGNOSTICS", "false").lower() == "true"
@@ -158,6 +159,7 @@ class Satellite:
                     self.mode = "listening"
                     self.status_light.set_state("listen")
                     self.clear_audio_queue()
+                    await self.wait_for_playback_silence()
                     LOG.info("awaiting follow-up without wake word: timeout=%ss", FOLLOW_UP_SECONDS)
                     utterance = await self.collect_utterance(FOLLOW_UP_SECONDS)
                 self.mode = "idle"
@@ -170,6 +172,18 @@ class Satellite:
     def clear_audio_queue(self):
         while not self.audio_queue.empty():
             self.audio_queue.get_nowait()
+
+    async def wait_for_playback_silence(self):
+        silent_frames = 0
+        while silent_frames < POST_PLAYBACK_SILENCE_FRAMES:
+            try:
+                frame = await asyncio.wait_for(self.audio_queue.get(), timeout=2)
+            except asyncio.TimeoutError:
+                return
+            if audioop.rms(frame, SAMPLE_WIDTH) < SPEECH_RMS:
+                silent_frames += 1
+            else:
+                silent_frames = 0
 
     async def capture_loop(self):
         command = ["arecord", "-D", CAPTURE_DEVICE, "-f", "S16_LE", "-r", str(SAMPLE_RATE), "-c", str(CAPTURE_CHANNELS), "-t", "raw"]
