@@ -75,6 +75,7 @@ DIAGNOSTICS = os.getenv("ORION_DIAGNOSTICS", "false").lower() == "true"
 class StatusLight:
     def __init__(self):
         self.ring = None
+        self.interruption_timer = None
         if not PIXEL_RING_ENABLED:
             return
         try:
@@ -89,7 +90,7 @@ class StatusLight:
             if self.ring is None:
                 raise RuntimeError("ReSpeaker USB pixel ring was not found")
             self.ring.set_brightness(20)
-            self.ring.set_color_palette(0x20B9D0, 0xF09A45)
+            self.ring.set_color_palette(0x35C9FF, 0x0038A8)
             self.ring.set_vad_led(0)
             self.set_state("idle")
             LOG.info("pixel ring ready")
@@ -100,14 +101,32 @@ class StatusLight:
         if self.ring is None:
             return
         try:
+            if self.interruption_timer is not None:
+                if state == "off":
+                    return
+                self.interruption_timer.cancel()
+                self.interruption_timer = None
             if state == "error":
                 self.ring.set_color(r=255, g=0, b=0)
+            elif state == "interrupted":
+                self.ring.spin()
+                self.interruption_timer = asyncio.get_running_loop().call_later(0.6, self.finish_interruption)
             elif state == "idle":
                 self.ring.off()
             else:
                 getattr(self.ring, state)()
         except Exception as error:
             LOG.warning("pixel ring update failed: %s", error)
+
+    def finish_interruption(self):
+        self.interruption_timer = None
+        self.set_state("off")
+
+    def close(self):
+        if self.interruption_timer is not None:
+            self.interruption_timer.cancel()
+            self.interruption_timer = None
+        self.set_state("off")
 
 
 class Satellite:
@@ -169,7 +188,7 @@ class Satellite:
         finally:
             capture_task.cancel()
             await self.stop_playback()
-            self.status_light.set_state("off")
+            self.status_light.close()
 
     def clear_audio_queue(self):
         while not self.audio_queue.empty():
@@ -433,7 +452,7 @@ class Satellite:
         if self.current_response is not None:
             self.current_response.close()
             self.current_response = None
-        self.status_light.set_state("off")
+        self.status_light.set_state("interrupted")
 
     async def stop_playback(self):
         if self.playback_process and self.playback_process.returncode is None:

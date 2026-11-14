@@ -24,7 +24,7 @@ flowchart LR
 	FollowUp -->|speech| Listen
 ```
 
-Ring states are off while idle, wake/listen during capture, think while the gateway processes a turn, and speak during audio playback. The ReSpeaker's native animations use a cyan and amber palette. Firmware VAD LEDs are disabled so ambient noise does not drive the visual state.
+Ring states are off while idle, wake/listen during capture, think while the gateway processes a turn, and speak during audio playback. The ReSpeaker's native animations use a light and dark blue palette, with a brief spin when playback is interrupted. Firmware VAD LEDs are disabled so ambient noise does not drive the visual state.
 
 ## Tested Hardware
 

@@ -41,12 +41,34 @@ class TestStatusLight(unittest.TestCase):
         ), patch.object(satellite.importlib.util, "module_from_spec", return_value=module):
             light = satellite.StatusLight()
         ring.set_brightness.assert_called_once_with(20)
-        ring.set_color_palette.assert_called_once_with(0x20B9D0, 0xF09A45)
+        ring.set_color_palette.assert_called_once_with(0x35C9FF, 0x0038A8)
         ring.set_vad_led.assert_called_once_with(0)
         ring.off.assert_called_once()
         for state in ("wakeup", "listen", "think", "speak", "off"):
             light.set_state(state)
             getattr(ring, state).assert_called()
+
+    def test_interruption_effect_finishes_or_yields_to_new_state(self):
+        light = satellite.StatusLight.__new__(satellite.StatusLight)
+        light.ring = MagicMock()
+        light.interruption_timer = None
+        loop = MagicMock()
+        timer = loop.call_later.return_value
+        with patch.object(satellite.asyncio, "get_running_loop", return_value=loop):
+            light.set_state("interrupted")
+            light.ring.spin.assert_called_once()
+            light.set_state("off")
+            light.ring.off.assert_not_called()
+            light.set_state("listen")
+            timer.cancel.assert_called_once()
+            light.ring.listen.assert_called_once()
+            light.set_state("interrupted")
+            light.finish_interruption()
+            light.ring.off.assert_called_once()
+            light.set_state("interrupted")
+            light.close()
+            self.assertEqual(light.ring.off.call_count, 2)
+            self.assertIsNone(light.interruption_timer)
 
 
 class TestFollowUpTimeout(unittest.IsolatedAsyncioTestCase):
