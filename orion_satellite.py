@@ -11,6 +11,7 @@ import re
 import signal
 import socket
 import subprocess
+import tempfile
 import time
 import wave
 
@@ -61,10 +62,10 @@ WAKE_MODEL = os.getenv("ORION_WAKE_MODEL", "")
 WAKE_THRESHOLD = float(os.getenv("ORION_WAKE_THRESHOLD", "0.7"))
 SPEECH_RMS = int(os.getenv("ORION_SPEECH_RMS", "450"))
 GAMMAVAD_SR = int(os.getenv("GAMMAVAD_SR", "10"))
-PLAYBACK_BUFFER_MS = int(os.getenv("ORION_PLAYBACK_BUFFER_MS", "500"))
+PLAYBACK_BUFFER_MS = int(os.getenv("ORION_PLAYBACK_BUFFER_MS", "150"))
 INTERRUPTION_FRAMES = int(os.getenv("ORION_INTERRUPTION_FRAMES", "4"))
 MAX_UTTERANCE_SECONDS = int(os.getenv("ORION_MAX_UTTERANCE_SECONDS", "12"))
-FOLLOW_UP_SECONDS = int(os.getenv("ORION_FOLLOW_UP_SECONDS", "5"))
+FOLLOW_UP_SECONDS = int(os.getenv("ORION_FOLLOW_UP_SECONDS", "3"))
 POST_PLAYBACK_SILENCE_FRAMES = int(os.getenv("ORION_POST_PLAYBACK_SILENCE_FRAMES", "4"))
 PIXEL_RING_ENABLED = os.getenv("ORION_PIXEL_RING", "false").lower() == "true"
 BARGE_IN_ENABLED = os.getenv("ORION_BARGE_IN_ENABLED", "false").lower() == "true"
@@ -87,7 +88,8 @@ class StatusLight:
             self.ring = module.find()
             if self.ring is None:
                 raise RuntimeError("ReSpeaker USB pixel ring was not found")
-            self.ring.set_brightness(10)
+            self.ring.set_brightness(20)
+            self.ring.set_color_palette(0x20B9D0, 0xF09A45)
             self.ring.set_vad_led(0)
             self.set_state("idle")
             LOG.info("pixel ring ready")
@@ -218,7 +220,10 @@ class Satellite:
                     LOG.info("wake detected: model=%s score=%.3f", wake_word, wake_score)
                     if self.mode == "idle":
                         self.status_light.set_state("wakeup")
-                    self.wake_detected.set()
+                    if self.mode == "speaking":
+                        self.interruption_detected.set()
+                    else:
+                        self.wake_detected.set()
                 if BARGE_IN_ENABLED and self.mode == "speaking" and level >= SPEECH_RMS:
                     interruption_frames += 1
                     if interruption_frames >= INTERRUPTION_FRAMES:
@@ -242,10 +247,13 @@ class Satellite:
         speech_started = False
         silent_frames = 0
         last_speech_at = None
+        initial_deadline = time.monotonic() + initial_timeout
         maximum_frames = MAX_UTTERANCE_SECONDS * 1000 // FRAME_MS
         while len(frames) < maximum_frames:
             try:
-                timeout = initial_timeout if not frames else 2
+                timeout = 2 if speech_started else initial_deadline - time.monotonic()
+                if timeout <= 0:
+                    break
                 frame = await asyncio.wait_for(self.audio_queue.get(), timeout=timeout)
             except asyncio.TimeoutError:
                 break
@@ -290,36 +298,76 @@ class Satellite:
                     raise RuntimeError(f"gateway returned {response.status}: {await response.text()}")
                 self.current_response = response
                 LOG.info("gateway accepted utterance; waiting for response audio")
-                multipart = aiohttp.MultipartReader.from_response(response)
                 try:
-                    async for part in multipart:
-                        if self.interruption_detected.is_set():
-                            await self.interrupt()
-                            return
-                        if part.headers.get("Content-Type") != "audio/L16":
-                            LOG.warning("gateway error: %s", (await part.text()).strip())
-                            continue
-                        text = part.headers.get("X-Voice-Text", "").strip()
-                        try:
-                            sample_rate = int(part.headers.get("X-Audio-Sample-Rate", "22050"))
-                            sample_width = int(part.headers.get("X-Audio-Sample-Width", "2"))
-                            channels = int(part.headers.get("X-Audio-Channels", "1"))
-                        except ValueError:
-                            LOG.warning("gateway returned invalid PCM headers")
-                            continue
-                        if not 8000 <= sample_rate <= 192000 or sample_width not in (1, 2, 3, 4) or not 1 <= channels <= 8:
-                            LOG.warning("gateway returned unsupported PCM format: rate=%s width=%s channels=%s", sample_rate, sample_width, channels)
-                            continue
-                        self.mode = "speaking"
-                        self.status_light.set_state("speak")
-                        await self.play_pcm(part, sample_rate, sample_width, channels, text)
-                        self.follow_up_requested = True
-                except aiohttp.ClientConnectionError:
-                    if self.mode != "idle":
-                        raise
-                    LOG.info("response stream closed after interruption")
+                    await self.receive_response_interruptibly(response)
                 finally:
                     self.current_response = None
+
+    async def receive_response_interruptibly(self, response):
+        response_task = asyncio.create_task(self.receive_response(response))
+        interruption_task = asyncio.create_task(self.interruption_detected.wait())
+        try:
+            await asyncio.wait((response_task, interruption_task), return_when=asyncio.FIRST_COMPLETED)
+            if self.interruption_detected.is_set():
+                response_task.cancel()
+                await asyncio.gather(response_task, return_exceptions=True)
+                await self.interrupt()
+            else:
+                await response_task
+        finally:
+            for task in (response_task, interruption_task):
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(response_task, interruption_task, return_exceptions=True)
+
+    async def receive_response(self, response):
+        multipart = aiohttp.MultipartReader.from_response(response)
+        async for part in multipart:
+            content_type = part.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+            if content_type not in {"audio/l16", "audio/wav", "audio/x-wav"}:
+                payload = await part.read(decode=False)
+                LOG.warning("gateway returned non-audio part: content_type=%s bytes=%s", content_type or "unknown", len(payload))
+                continue
+            text = part.headers.get("X-Voice-Text", "").strip()
+            if content_type != "audio/l16":
+                wav = await part.read(decode=False)
+                if wav:
+                    self.mode = "speaking"
+                    self.status_light.set_state("speak")
+                    await self.play_wav(wav)
+                    self.follow_up_requested = True
+                continue
+            try:
+                sample_rate = int(part.headers.get("X-Audio-Sample-Rate", "22050"))
+                sample_width = int(part.headers.get("X-Audio-Sample-Width", "2"))
+                channels = int(part.headers.get("X-Audio-Channels", "1"))
+            except ValueError:
+                LOG.warning("gateway returned invalid PCM headers")
+                continue
+            if not 8000 <= sample_rate <= 192000 or sample_width not in (1, 2, 3, 4) or not 1 <= channels <= 8:
+                LOG.warning("gateway returned unsupported PCM format: rate=%s width=%s channels=%s", sample_rate, sample_width, channels)
+                continue
+            self.mode = "speaking"
+            self.status_light.set_state("speak")
+            await self.play_pcm(part, sample_rate, sample_width, channels, text)
+            self.follow_up_requested = True
+
+    async def play_wav(self, wav):
+        with tempfile.NamedTemporaryFile(suffix=".wav") as audio_file:
+            audio_file.write(wav)
+            audio_file.flush()
+            self.playback_process = await asyncio.create_subprocess_exec(
+                "aplay", "-D", PLAYBACK_DEVICE, "--file-type", "wav", audio_file.name
+            )
+            try:
+                await self.playback_process.wait()
+                if self.playback_process.returncode != 0:
+                    raise RuntimeError(f"audio playback failed with exit code {self.playback_process.returncode}")
+            finally:
+                if self.playback_process and self.playback_process.returncode is None:
+                    self.playback_process.terminate()
+                    await self.playback_process.wait()
+                self.playback_process = None
 
     async def play_pcm(self, part, sample_rate, sample_width, channels, text):
         format_by_width = {1: "U8", 2: "S16_LE", 3: "S24_3LE", 4: "S32_LE"}
@@ -330,7 +378,8 @@ class Satellite:
         buffered_audio = bytearray()
         first_pcm_received = True
         while len(buffered_audio) < minimum_buffer_bytes:
-            chunk = await part.read_chunk(size=32 * 1024)
+            chunk_size = max(1024, min(32 * 1024, minimum_buffer_bytes - len(buffered_audio)))
+            chunk = await part.read_chunk(size=chunk_size)
             if not chunk:
                 break
             if first_pcm_received:
@@ -354,9 +403,6 @@ class Satellite:
                 await self.playback_process.stdin.drain()
                 audio_bytes += len(buffered_audio)
             while chunk := await part.read_chunk(size=32 * 1024):
-                if self.interruption_detected.is_set():
-                    await self.interrupt()
-                    return
                 if first_audio:
                     after_speech = time.monotonic() - self.last_speech_at if self.last_speech_at is not None else 0
                     LOG.info("voice timing phase=first_playback_pcm end_of_speech_to_first_playback_s=%.3f text=%r", after_speech, text)
@@ -379,13 +425,14 @@ class Satellite:
             self.playback_process = None
 
     async def interrupt(self):
+        self.mode = "idle"
         self.wake_detected.clear()
         self.interruption_detected.clear()
+        self.follow_up_requested = False
         await self.stop_playback()
         if self.current_response is not None:
             self.current_response.close()
             self.current_response = None
-        self.mode = "idle"
         self.status_light.set_state("off")
 
     async def stop_playback(self):
