@@ -3,10 +3,18 @@ from pathlib import Path
 import shutil
 import subprocess
 import tempfile
+import tomllib
 import unittest
 
 
 ROOT = Path(__file__).resolve().parent
+
+
+class TestSpotifyConfiguration(unittest.TestCase):
+    def test_headless_spotify_disables_mpris(self):
+        with (ROOT / "spotifyd" / "spotifyd.conf").open("rb") as config_file:
+            config = tomllib.load(config_file)
+        self.assertIs(config["global"]["use_mpris"], False)
 
 
 class TestSpotifyScripts(unittest.TestCase):

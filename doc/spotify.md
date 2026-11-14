@@ -26,5 +26,6 @@ The mixer exposes an anonymous PulseAudio Unix socket only through the `pulse-so
 - Check `docker compose --profile spotify ps` and `docker compose --profile spotify logs audio satellite spotifyd`. Do not share logs or configuration containing credentials.
 - If the mixer cannot open the device, confirm `ORION_PLAYBACK_DEVICE` with `aplay -l`, check `/dev/snd` permissions, and stop other applications using the output. The mixer health check confirms its sink is present, not that physical playback is audible.
 - If Orion is missing in Spotify, confirm Premium, same LAN, multicast discovery, TCP 4444, and that no other Spotifyd instance is using that port. VPNs, guest networks, and client isolation can block discovery.
+- If Spotifyd exits with a D-Bus initialization error, ensure `use_mpris = false` is set in `spotifyd/spotifyd.conf` and recreate the Spotifyd container. The headless container does not provide a D-Bus session.
 - If music is not ducked, confirm `ORION_AUDIO_DUCKING=true`, recreate changed services, and check mixer and satellite logs. The validator cannot verify audible ducking or authorization.
 - If speaker audio triggers the microphone or interrupts replies, verify the processed capture channel and ReSpeaker playback route for hardware AEC; reduce volume or disable barge-in if needed.
