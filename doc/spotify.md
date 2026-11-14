@@ -15,7 +15,7 @@ The helper does not import credentials from an older Spotifyd installation. Keep
 ## Settings and operations
 
 - Change the Connect name in `spotifyd/spotifyd.conf` under `device_name`, then run `docker compose --profile spotify up -d --force-recreate spotifyd`.
-- Set `ORION_DUCK_VOLUME` in `.env` to a PulseAudio volume such as `-20dB`; set `ORION_AUDIO_DUCKING=false` to leave music at its original level. Apply changes with `docker compose --profile spotify up -d`. Ducking affects PulseAudio streams with the `music` role; Orion voice remains at its normal level.
+- Set `ORION_DUCK_VOLUME` in `.env` to a PulseAudio volume such as `-16dB`; set `ORION_AUDIO_DUCKING=false` to leave music at its original level. Apply changes with `docker compose --profile spotify up -d`. Ducking affects PulseAudio streams with the `music` role; Orion voice remains at its normal level.
 - To stop only Spotify, run `docker compose --profile spotify stop spotifyd`. To remove the Spotify container, run `docker compose --profile spotify rm -sf spotifyd`. The cache remains on disk. The mixer remains required for Orion playback.
 - To start Spotify again, run `docker compose --profile spotify up -d`. To remove saved Spotify credentials, stop Spotifyd first and remove `spotifyd/cache` deliberately; the next setup will require pairing again.
 

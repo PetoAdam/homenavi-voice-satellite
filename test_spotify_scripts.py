@@ -17,6 +17,32 @@ class TestSpotifyConfiguration(unittest.TestCase):
         self.assertIs(config["global"]["use_mpris"], False)
 
 
+class TestAudioMixerConfiguration(unittest.TestCase):
+    def test_ducking_default_and_override(self):
+        with tempfile.TemporaryDirectory() as directory:
+            bindir = Path(directory)
+            for name, script in {
+                "chmod": "#!/bin/sh\nexit 0\n",
+                "pulseaudio": "#!/bin/sh\nprintf '%s\\n' \"$@\"\n",
+            }.items():
+                executable = bindir / name
+                executable.write_text(script)
+                executable.chmod(0o755)
+            environment = os.environ.copy()
+            environment["PATH"] = str(bindir) + os.pathsep + environment["PATH"]
+            environment["ORION_PLAYBACK_DEVICE"] = "null"
+            for configured, expected in ((None, "-16dB"), ("-10dB", "-10dB")):
+                with self.subTest(configured=configured):
+                    environment.pop("ORION_DUCK_VOLUME", None)
+                    if configured is not None:
+                        environment["ORION_DUCK_VOLUME"] = configured
+                    result = subprocess.run(
+                        ["sh", str(ROOT / "audio" / "start-audio.sh")],
+                        env=environment, capture_output=True, text=True, check=True,
+                    )
+                    self.assertIn(f"ducking_roles=music volume={expected}", result.stdout)
+
+
 class TestSpotifyScripts(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()

@@ -21,4 +21,4 @@ exec pulseaudio --system --daemonize=no --exit-idle-time=-1 --log-target=stderr 
     --disable-shm=true -n \
     --load="module-native-protocol-unix socket=/run/orion-audio/native auth-anonymous=1" \
     --load="$sink" \
-    --load="module-role-ducking trigger_roles=phone ducking_roles=music volume=${ORION_DUCK_VOLUME:--20dB}"
+    --load="module-role-ducking trigger_roles=phone ducking_roles=music volume=${ORION_DUCK_VOLUME:--16dB}"

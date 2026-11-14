@@ -6,7 +6,7 @@ services:
       - /dev/snd:/dev/snd
     environment:
       ORION_PLAYBACK_DEVICE: ${ORION_PLAYBACK_DEVICE:-}
-      ORION_DUCK_VOLUME: ${ORION_DUCK_VOLUME:--20dB}
+      ORION_DUCK_VOLUME: ${ORION_DUCK_VOLUME:--16dB}
     volumes:
       - pulse-socket:/run/orion-audio
     healthcheck:
