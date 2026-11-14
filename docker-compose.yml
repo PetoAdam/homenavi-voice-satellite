@@ -1,6 +1,26 @@
 services:
+  audio:
+    build:
+      context: ./audio
+    devices:
+      - /dev/snd:/dev/snd
+    environment:
+      ORION_PLAYBACK_DEVICE: ${ORION_PLAYBACK_DEVICE:-}
+      ORION_DUCK_VOLUME: ${ORION_DUCK_VOLUME:--20dB}
+    volumes:
+      - pulse-socket:/run/orion-audio
+    healthcheck:
+      test: ["CMD-SHELL", "pactl --server=unix:/run/orion-audio/native list short sinks | grep -q '[[:space:]]orion[[:space:]]'"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+
   satellite:
     build: .
+    depends_on:
+      audio:
+        condition: service_healthy
     devices:
       - /dev/snd:/dev/snd
       - /dev/bus/usb:/dev/bus/usb
@@ -9,8 +29,12 @@ services:
     environment:
       PYTHONUNBUFFERED: "1"
       ORION_GATEWAY_URL: ${ORION_GATEWAY_URL:?set the reachable gateway URL}
+      ORION_SESSION_ID: ${ORION_SESSION_ID:-}
       ORION_CAPTURE_DEVICE: ${ORION_CAPTURE_DEVICE:-}
-      ORION_PLAYBACK_DEVICE: ${ORION_PLAYBACK_DEVICE:-}
+      ORION_PLAYBACK_DEVICE: pulse
+      ORION_AUDIO_DUCKING: ${ORION_AUDIO_DUCKING:-true}
+      PULSE_SERVER: unix:/run/orion-audio/native
+      PULSE_PROP: media.role=orion
       ORION_CAPTURE_CHANNELS: ${ORION_CAPTURE_CHANNELS:-1}
       ORION_CAPTURE_CHANNEL: ${ORION_CAPTURE_CHANNEL:-0}
       ORION_CAPTURE_FALLBACK_CHANNEL: ${ORION_CAPTURE_FALLBACK_CHANNEL:-0}
@@ -27,10 +51,30 @@ services:
       ORION_DIAGNOSTICS: ${ORION_DIAGNOSTICS:-false}
       PYTHONPATH: /pixel_ring
     volumes:
+      - pulse-socket:/run/orion-audio
       - ./models:/models:ro
       - /home/ubuntu/pixel_ring:/pixel_ring:ro
       - openwakeword-models:/usr/local/lib/python3.11/site-packages/openwakeword/resources/models
     restart: unless-stopped
 
+  spotifyd:
+    image: hvalev/spotifyd-pulseaudio:0.4.2
+    profiles: ["spotify"]
+    user: "${ORION_UID:-1000}:${ORION_GID:-1000}"
+    network_mode: host
+    depends_on:
+      audio:
+        condition: service_healthy
+    environment:
+      PULSE_SERVER: unix:/run/orion-audio/native
+      PULSE_PROP: media.role=music
+    volumes:
+      - pulse-socket:/run/orion-audio
+      - ./spotifyd/spotifyd.conf:/etc/spotifyd.conf:ro
+      - ./spotifyd/cache:/cache
+    command: ["/usr/bin/spotifyd", "--no-daemon", "--config-path", "/etc/spotifyd.conf"]
+    restart: unless-stopped
+
 volumes:
   openwakeword-models:
+  pulse-socket:

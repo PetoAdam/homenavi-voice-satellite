@@ -1,6 +1,7 @@
 import asyncio
 import importlib
 import os
+import runpy
 import sys
 import types
 import unittest
@@ -29,6 +30,132 @@ def load_satellite():
 satellite = load_satellite()
 SILENCE = bytes(satellite.FRAME_BYTES)
 SPEECH = b"\xff\x7f" * (satellite.FRAME_BYTES // 2)
+
+
+class TestSessionConfiguration(unittest.TestCase):
+    def test_explicit_and_empty_session_ids(self):
+        for configured, expected in (("living-room", "living-room"), ("", "test-host")):
+            with self.subTest(configured=configured), patch.dict(os.environ, {
+                "ORION_SESSION_ID": configured,
+                "ORION_CAPTURE_DEVICE": "test",
+                "ORION_PLAYBACK_DEVICE": "test",
+            }), patch.object(satellite.socket, "gethostname", return_value="test-host"), patch.dict(sys.modules, {
+                "aiohttp": types.ModuleType("aiohttp"),
+                "numpy": types.ModuleType("numpy"),
+                "openwakeword": types.ModuleType("openwakeword"),
+                "openwakeword.model": types.SimpleNamespace(Model=object),
+                "openwakeword.utils": types.SimpleNamespace(download_models=lambda: None),
+            }):
+                module = runpy.run_path(satellite.__file__)
+                self.assertEqual(module["SESSION_ID"], expected)
+
+
+class TestAudioDucker(unittest.IsolatedAsyncioTestCase):
+    async def test_trigger_is_started_once_and_stopped(self):
+        process = MagicMock()
+        process.returncode = None
+        process.stdin.drain = unittest.mock.AsyncMock()
+        process.wait = unittest.mock.AsyncMock()
+        ducker = satellite.AudioDucker(True)
+        with patch.object(satellite.asyncio, "create_subprocess_exec", return_value=process) as create:
+            await ducker.start()
+            await ducker.start()
+            await asyncio.sleep(0)
+            process.stdin.write.assert_called_with(bytes(1600))
+            await ducker.stop()
+        create.assert_called_once()
+        self.assertIn("--property=media.role=phone", create.call_args.args)
+        process.terminate.assert_called_once()
+        process.wait.assert_awaited_once()
+        self.assertIsNone(ducker.process)
+        self.assertIsNone(ducker.feed_task)
+
+    async def test_disabled_and_missing_pacat_do_not_break_orion(self):
+        with patch.object(satellite.asyncio, "create_subprocess_exec", side_effect=FileNotFoundError):
+            disabled = satellite.AudioDucker(False)
+            await disabled.start()
+            await disabled.stop()
+            enabled = satellite.AudioDucker(True)
+            await enabled.start()
+            await enabled.stop()
+            self.assertIsNone(enabled.process)
+
+
+class TestConversationDucking(unittest.IsolatedAsyncioTestCase):
+    def make_satellite(self):
+        instance = satellite.Satellite.__new__(satellite.Satellite)
+        instance.wake_detected = asyncio.Event()
+        instance.wake_detected.set()
+        instance.mode = "idle"
+        instance.status_light = MagicMock()
+        instance.audio_ducker = types.SimpleNamespace(
+            start=unittest.mock.AsyncMock(), stop=unittest.mock.AsyncMock()
+        )
+        instance.capture_loop = unittest.mock.AsyncMock(side_effect=self.wait_forever)
+        instance.stop_playback = unittest.mock.AsyncMock()
+        instance.wait_for_playback_silence = unittest.mock.AsyncMock()
+        instance.clear_audio_queue = MagicMock()
+        instance.follow_up_requested = False
+        return instance
+
+    async def wait_forever(self):
+        await asyncio.Event().wait()
+
+    async def test_no_speech_restores_ducking(self):
+        instance = self.make_satellite()
+        stopped = asyncio.Event()
+        instance.collect_utterance = unittest.mock.AsyncMock(return_value=None)
+        instance.audio_ducker.stop.side_effect = stopped.set
+        task = asyncio.create_task(instance.run())
+        await asyncio.wait_for(stopped.wait(), 1)
+        task.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+        instance.audio_ducker.start.assert_awaited_once()
+        self.assertEqual(instance.audio_ducker.stop.await_count, 2)
+
+    async def test_follow_up_stays_ducked_until_conversation_ends(self):
+        instance = self.make_satellite()
+        stopped = asyncio.Event()
+        instance.collect_utterance = unittest.mock.AsyncMock(side_effect=[b"first", b"second"])
+
+        async def send_turn(utterance):
+            instance.audio_ducker.stop.assert_not_awaited()
+            instance.follow_up_requested = utterance == b"first"
+
+        instance.send_turn = unittest.mock.AsyncMock(side_effect=send_turn)
+        instance.audio_ducker.stop.side_effect = stopped.set
+        task = asyncio.create_task(instance.run())
+        await asyncio.wait_for(stopped.wait(), 1)
+        task.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+        self.assertEqual(instance.send_turn.await_count, 2)
+        instance.audio_ducker.start.assert_awaited_once()
+        self.assertEqual(instance.audio_ducker.stop.await_count, 2)
+
+    async def test_error_and_cancellation_restore_ducking(self):
+        for cancel in (False, True):
+            with self.subTest(cancel=cancel):
+                instance = self.make_satellite()
+                listening = asyncio.Event()
+
+                async def collect():
+                    listening.set()
+                    if cancel:
+                        await self.wait_forever()
+                    raise RuntimeError("capture failed")
+
+                instance.collect_utterance = unittest.mock.AsyncMock(side_effect=collect)
+                task = asyncio.create_task(instance.run())
+                await asyncio.wait_for(listening.wait(), 1)
+                if cancel:
+                    task.cancel()
+                with self.assertRaises(asyncio.CancelledError if cancel else RuntimeError):
+                    await task
+                instance.audio_ducker.stop.assert_awaited_once()
+                instance.stop_playback.assert_awaited_once()
+                instance.status_light.close.assert_called_once()
 
 
 class TestStatusLight(unittest.TestCase):

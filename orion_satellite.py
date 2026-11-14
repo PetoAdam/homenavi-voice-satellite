@@ -31,7 +31,7 @@ FRAME_MS = 80
 FRAME_BYTES = SAMPLE_RATE * SAMPLE_WIDTH * FRAME_MS // 1000
 GATEWAY_URL = os.getenv("ORION_GATEWAY_URL", "http://127.0.0.1:8090/voice/v1/turns")
 GATEWAY_ACCESS_TOKEN = os.getenv("ORION_GATEWAY_ACCESS_TOKEN", "")
-SESSION_ID = os.getenv("ORION_SESSION_ID", socket.gethostname())
+SESSION_ID = os.getenv("ORION_SESSION_ID") or socket.gethostname()
 
 
 def alsa_device(env_name, utility):
@@ -70,6 +70,51 @@ POST_PLAYBACK_SILENCE_FRAMES = int(os.getenv("ORION_POST_PLAYBACK_SILENCE_FRAMES
 PIXEL_RING_ENABLED = os.getenv("ORION_PIXEL_RING", "false").lower() == "true"
 BARGE_IN_ENABLED = os.getenv("ORION_BARGE_IN_ENABLED", "false").lower() == "true"
 DIAGNOSTICS = os.getenv("ORION_DIAGNOSTICS", "false").lower() == "true"
+AUDIO_DUCKING = os.getenv("ORION_AUDIO_DUCKING", "false").lower() == "true"
+
+
+class AudioDucker:
+    def __init__(self, enabled):
+        self.enabled = enabled
+        self.process = None
+        self.feed_task = None
+
+    async def start(self):
+        if not self.enabled or self.process is not None:
+            return
+        try:
+            self.process = await asyncio.create_subprocess_exec(
+                "pacat", "--playback", "--raw", "--format=s16le", "--rate=8000",
+                "--channels=1", "--property=media.role=phone", "--client-name=Orion ducking",
+                stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            self.feed_task = asyncio.create_task(self.feed_silence())
+        except OSError as error:
+            LOG.warning("audio ducking unavailable: %s", error)
+
+    async def feed_silence(self):
+        try:
+            while True:
+                self.process.stdin.write(bytes(1600))
+                await self.process.stdin.drain()
+                await asyncio.sleep(0.1)
+        except (BrokenPipeError, ConnectionResetError, OSError) as error:
+            LOG.warning("audio ducking stream stopped: %s", error)
+
+    async def stop(self):
+        if self.feed_task is not None:
+            self.feed_task.cancel()
+            await asyncio.gather(self.feed_task, return_exceptions=True)
+            self.feed_task = None
+        if self.process is not None:
+            if self.process.returncode is None:
+                try:
+                    self.process.terminate()
+                except ProcessLookupError:
+                    pass
+            await self.process.wait()
+            self.process = None
 
 
 class StatusLight:
@@ -153,6 +198,7 @@ class Satellite:
         self.follow_up_requested = False
         self.last_speech_at = None
         self.status_light = StatusLight()
+        self.audio_ducker = AudioDucker(AUDIO_DUCKING)
         LOG.info("satellite ready: wake_threshold=%s models=%s", WAKE_THRESHOLD, list(self.wake_model.models))
 
     async def run(self):
@@ -166,6 +212,7 @@ class Satellite:
                     await self.interrupt()
                     continue
                 LOG.info("wake detected; collecting utterance")
+                await self.audio_ducker.start()
                 self.mode = "listening"
                 self.status_light.set_state("listen")
                 utterance = await self.collect_utterance()
@@ -183,10 +230,12 @@ class Satellite:
                     await self.wait_for_playback_silence()
                     LOG.info("awaiting follow-up without wake word: timeout=%ss", FOLLOW_UP_SECONDS)
                     utterance = await self.collect_utterance(FOLLOW_UP_SECONDS)
+                await self.audio_ducker.stop()
                 self.mode = "idle"
                 self.status_light.set_state("off")
         finally:
             capture_task.cancel()
+            await self.audio_ducker.stop()
             await self.stop_playback()
             self.status_light.close()
 

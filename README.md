@@ -15,7 +15,9 @@ flowchart LR
 	VAD -->|speech ends| Listen
 	Listen -->|WAV| Gateway[Voice gateway]
 	Gateway -->|multipart PCM stream| Playback[ALSA aplay]
-	Playback --> Speaker[ReSpeaker speaker]
+	Playback --> Mixer[PulseAudio mixer]
+	Spotify[Optional Spotify Connect] --> Mixer
+	Mixer --> Speaker[ReSpeaker speaker]
 	Wake --> LEDs[Pixel ring state]
 	Listen --> LEDs
 	Gateway --> LEDs
@@ -36,7 +38,7 @@ The current recommended Orion satellite setup is:
 - The ReSpeaker USB pixel ring for assistant-state feedback.
 - A stable network path to the voice gateway.
 
-For Seeed's six-channel ReSpeaker firmware, channel `0` is processed speech, channels `1`-`4` are raw microphones, and channel `5` is the playback reference. Use channel `0` for capture and route playback through the ReSpeaker audio output so its hardware DSP can cancel echo. The example uses `plughw:CARD=ArrayUAC10,DEV=0` for both. When capture or playback devices are omitted, the satellite detects a ReSpeaker ALSA device automatically. Verify the channel mapping for other firmware and test actual echo cancellation in the room.
+For Seeed's six-channel ReSpeaker firmware, channel `0` is processed speech, channels `1`-`4` are raw microphones, and channel `5` is the playback reference. Use channel `0` for capture and route playback through the ReSpeaker audio output so its hardware DSP can cancel echo. The example uses `plughw:CARD=ArrayUAC10,DEV=0` for capture and for the mixer's hardware output. When those devices are omitted, the satellite and mixer respectively try to detect a ReSpeaker ALSA device. Verify the channel mapping for other firmware and test actual echo cancellation in the room.
 
 Other hardware is supported in principle, but small changes might necessary. Use `arecord -l` and `aplay -l` to identify the right ALSA devices; adjust the channel count and selected capture/fallback channels for the array; then recalibrate `ORION_SPEECH_RMS`, `ORION_WAKE_THRESHOLD`, and interruption settings for the room. Pixel-ring controls require the ReSpeaker USB LED interface; disable `ORION_PIXEL_RING` for microphones without it. Speaker echo can make barge-in unreliable unless the selected capture channel provides working AEC.
 
@@ -56,6 +58,8 @@ Key configuration values:
 ORION_GATEWAY_URL=http://PI_OR_LAN_HOST:8090/voice/v1/turns
 ORION_CAPTURE_DEVICE=plughw:CARD=YOUR_RESPEAKER,DEV=0
 ORION_PLAYBACK_DEVICE=plughw:CARD=YOUR_SPEAKER,DEV=0
+ORION_AUDIO_DUCKING=true
+ORION_DUCK_VOLUME=-20dB
 ORION_WAKE_MODEL=/models/hey_orion.tflite
 ORION_CAPTURE_CHANNELS=6
 ORION_CAPTURE_CHANNEL=0
@@ -89,6 +93,10 @@ Discover stable ALSA card identifiers on the Pi using `arecord -l` and `aplay -l
 docker compose up --build
 ```
 
-The container gets only `/dev/snd` and no host network, cloud credential, or raw-audio persistence. Avoid exposing the unauthenticated POC gateway outside your trusted LAN.
+The satellite uses `/dev/snd` for capture and the shared mixer for playback. The mixer owns the selected ALSA output; stop other programs that use that output exclusively. The satellite and mixer do not use host networking. The optional Spotify service does, for LAN discovery. No raw audio is persisted. Avoid exposing the unauthenticated POC gateway outside your trusted LAN.
+
+## Optional Spotify Connect
+
+The `spotify` Compose profile adds a Spotify Connect speaker named **Orion**. It uses the same output as voice and automatically lowers music while Orion is listening, responding, and waiting for follow-ups. A Spotify Premium account and a Spotify client on the same network are required. Follow the [Spotify setup and troubleshooting guide](doc/spotify.md) to enable it, pair the device, validate the setup, and learn about cache permissions and the shared audio socket.
 
 Set `ORION_INTERRUPTION_FRAMES` high enough that brief noise does not cancel playback. With the ReSpeaker processed/AEC capture channel, start at four 80 ms frames (320 ms). Test both speech over playback and playback without speech. If speaker playback triggers cancellations, correct the capture channel and AEC route or disable `ORION_BARGE_IN_ENABLED`; RMS-based interruption can also mistake other loud sounds for speech. An interruption stops the response; it does not automatically send the interrupting speech as a new command.

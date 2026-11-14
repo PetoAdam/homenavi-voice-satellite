@@ -17,5 +17,8 @@ jobs:
         with:
           python-version: "3.11"
       - run: python -m py_compile orion_satellite.py
-      - run: ORION_GATEWAY_URL=http://example.invalid docker compose config >/dev/null
+      - run: python -m unittest test_orion_satellite test_spotify_scripts
+      - run: for script in audio/start-audio.sh scripts/setup-spotifyd.sh scripts/validate-spotifyd.sh; do sh -n "$script"; done
+      - run: ORION_GATEWAY_URL=http://example.invalid docker compose --profile spotify config --quiet
+      - run: docker build --tag homenavi-voice-audio:ci audio
       - run: docker build --tag homenavi-voice-satellite:ci .
