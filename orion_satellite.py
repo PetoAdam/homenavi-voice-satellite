@@ -8,7 +8,6 @@ import importlib.util
 import logging
 import os
 import re
-import signal
 import socket
 import subprocess
 import tempfile
@@ -63,6 +62,7 @@ WAKE_THRESHOLD = float(os.getenv("ORION_WAKE_THRESHOLD", "0.7"))
 SPEECH_RMS = int(os.getenv("ORION_SPEECH_RMS", "450"))
 GAMMAVAD_SR = int(os.getenv("GAMMAVAD_SR", "10"))
 PLAYBACK_BUFFER_MS = int(os.getenv("ORION_PLAYBACK_BUFFER_MS", "150"))
+PLAYBACK_STOP_TIMEOUT = 1.0
 INTERRUPTION_FRAMES = int(os.getenv("ORION_INTERRUPTION_FRAMES", "4"))
 MAX_UTTERANCE_SECONDS = int(os.getenv("ORION_MAX_UTTERANCE_SECONDS", "12"))
 FOLLOW_UP_SECONDS = int(os.getenv("ORION_FOLLOW_UP_SECONDS", "3"))
@@ -245,9 +245,13 @@ class Satellite:
 
     async def wait_for_playback_silence(self):
         silent_frames = 0
+        deadline = time.monotonic() + 2
         while silent_frames < POST_PLAYBACK_SILENCE_FRAMES:
             try:
-                frame = await asyncio.wait_for(self.audio_queue.get(), timeout=2)
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return
+                frame = await asyncio.wait_for(self.audio_queue.get(), timeout=remaining)
             except asyncio.TimeoutError:
                 return
             if audioop.rms(frame, SAMPLE_WIDTH) < SPEECH_RMS:
@@ -304,6 +308,7 @@ class Satellite:
                         self.audio_queue.put_nowait(frame)
                     except asyncio.QueueFull:
                         pass
+                await asyncio.sleep(0)
         except asyncio.IncompleteReadError:
             raise RuntimeError("audio capture stopped; check ORION_CAPTURE_DEVICE")
         finally:
@@ -377,6 +382,7 @@ class Satellite:
         try:
             await asyncio.wait((response_task, interruption_task), return_when=asyncio.FIRST_COMPLETED)
             if self.interruption_detected.is_set():
+                self.mode = "interrupting"
                 response_task.cancel()
                 await asyncio.gather(response_task, return_exceptions=True)
                 await self.interrupt()
@@ -433,8 +439,7 @@ class Satellite:
                     raise RuntimeError(f"audio playback failed with exit code {self.playback_process.returncode}")
             finally:
                 if self.playback_process and self.playback_process.returncode is None:
-                    self.playback_process.terminate()
-                    await self.playback_process.wait()
+                    await self.stop_playback()
                 self.playback_process = None
 
     async def play_pcm(self, part, sample_rate, sample_width, channels, text):
@@ -488,8 +493,7 @@ class Satellite:
             LOG.warning("audio playback stream failed: %s", error)
         finally:
             if self.playback_process and self.playback_process.returncode is None:
-                self.playback_process.terminate()
-                await self.playback_process.wait()
+                await self.stop_playback()
             self.playback_process = None
 
     async def interrupt(self):
@@ -504,9 +508,23 @@ class Satellite:
         self.status_light.set_state("interrupted")
 
     async def stop_playback(self):
-        if self.playback_process and self.playback_process.returncode is None:
-            self.playback_process.send_signal(signal.SIGTERM)
-            await self.playback_process.wait()
+        process = self.playback_process
+        if process and process.returncode is None:
+            if process.stdin is not None:
+                process.stdin.close()
+            try:
+                process.terminate()
+            except ProcessLookupError:
+                pass
+            try:
+                await asyncio.wait_for(process.wait(), PLAYBACK_STOP_TIMEOUT)
+            except asyncio.TimeoutError:
+                LOG.warning("audio playback did not stop; killing process")
+                try:
+                    process.kill()
+                except ProcessLookupError:
+                    pass
+                await process.wait()
         self.playback_process = None
 
 

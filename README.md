@@ -77,7 +77,7 @@ ORION_POST_PLAYBACK_SILENCE_FRAMES=4
 default is `10` (800 ms). `ORION_PLAYBACK_BUFFER_MS` controls the short PCM
 buffer retained before ALSA playback begins; a smaller buffer may cause underruns.
 After playback, `ORION_POST_PLAYBACK_SILENCE_FRAMES` requires four consecutive
-silent 80 ms frames (320 ms) before listening for a follow-up. The follow-up
+silent 80 ms frames (320 ms), or a maximum wait of two seconds, before listening for a follow-up. The follow-up
 window then allows three seconds for speech to begin by default. Existing `.env`
 values override these defaults. The satellite logs the elapsed time from the last
 detected speech frame to the first PCM chunk received and handed to `aplay` for

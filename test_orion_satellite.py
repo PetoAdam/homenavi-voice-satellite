@@ -199,6 +199,16 @@ class TestStatusLight(unittest.TestCase):
 
 
 class TestFollowUpTimeout(unittest.IsolatedAsyncioTestCase):
+    async def test_noisy_playback_silence_wait_is_bounded(self):
+        instance = satellite.Satellite.__new__(satellite.Satellite)
+        instance.audio_queue = asyncio.Queue()
+        for _ in range(100):
+            instance.audio_queue.put_nowait(SPEECH)
+        clock = types.SimpleNamespace(monotonic=MagicMock(side_effect=[0, 0, 1, 2]))
+        with patch.object(satellite, "time", clock):
+            await asyncio.wait_for(instance.wait_for_playback_silence(), timeout=0.5)
+        self.assertGreater(instance.audio_queue.qsize(), 0)
+
     async def test_silent_frames_do_not_extend_initial_timeout(self):
         instance = satellite.Satellite.__new__(satellite.Satellite)
         instance.audio_queue = asyncio.Queue()
@@ -233,6 +243,26 @@ class TestFollowUpTimeout(unittest.IsolatedAsyncioTestCase):
 
 
 class TestPlaybackBuffer(unittest.IsolatedAsyncioTestCase):
+    async def test_unresponsive_playback_is_killed(self):
+        instance = satellite.Satellite.__new__(satellite.Satellite)
+        process = await asyncio.create_subprocess_exec(
+            sys.executable, "-c",
+            "import signal; signal.signal(signal.SIGTERM, signal.SIG_IGN); print('ready', flush=True); signal.pause()",
+            stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+        )
+        try:
+            await asyncio.wait_for(process.stdout.readline(), timeout=1)
+            process.stdin.write(bytes(1024 * 1024))
+            instance.playback_process = process
+            with patch.object(satellite, "PLAYBACK_STOP_TIMEOUT", 0.05):
+                await asyncio.wait_for(instance.stop_playback(), timeout=1)
+            self.assertEqual(process.returncode, -9)
+            self.assertIsNone(instance.playback_process)
+        finally:
+            if process.returncode is None:
+                process.kill()
+                await process.wait()
+
     async def test_wav_response_is_played(self):
         instance = satellite.Satellite.__new__(satellite.Satellite)
         instance.status_light = types.SimpleNamespace(set_state=lambda state: None)
@@ -265,6 +295,7 @@ class TestPlaybackBuffer(unittest.IsolatedAsyncioTestCase):
 
         class Process:
             returncode = None
+            stdin = None
 
             def terminate(self):
                 self.returncode = -15
@@ -355,6 +386,9 @@ class TestPlaybackBuffer(unittest.IsolatedAsyncioTestCase):
             async def drain(self):
                 pass
 
+            def close(self):
+                pass
+
         class Process:
             stdin = Sink()
             returncode = None
@@ -385,6 +419,48 @@ class TestPlaybackBuffer(unittest.IsolatedAsyncioTestCase):
 
 
 class TestBargeIn(unittest.IsolatedAsyncioTestCase):
+    async def test_buffered_capture_yields_to_interruption_handler(self):
+        instance = satellite.Satellite.__new__(satellite.Satellite)
+        instance.mode = "speaking"
+        instance.capture_channel = 0
+        instance.interruption_detected = asyncio.Event()
+        instance.wake_detected = asyncio.Event()
+        instance.wake_model = types.SimpleNamespace(predict=lambda frame: {"wake": 0.0})
+        instance.last_diagnostics = 0.0
+        frames = 0
+
+        class Capture:
+            async def readexactly(self, size):
+                nonlocal frames
+                frames += 1
+                if frames > 100:
+                    raise asyncio.IncompleteReadError(b"", size)
+                return SPEECH
+
+        class Process:
+            stdout = Capture()
+
+            def terminate(self):
+                pass
+
+            async def wait(self):
+                pass
+
+        with patch.object(satellite, "BARGE_IN_ENABLED", True), patch.object(
+            satellite, "CAPTURE_CHANNELS", 1
+        ), patch.object(satellite, "INTERRUPTION_FRAMES", 4), patch.object(
+            satellite.np, "frombuffer", return_value=None, create=True
+        ), patch.object(satellite.np, "int16", object(), create=True), patch.object(
+            satellite.asyncio, "create_subprocess_exec", return_value=Process()
+        ):
+            task = asyncio.create_task(instance.capture_loop())
+            try:
+                await asyncio.wait_for(instance.interruption_detected.wait(), timeout=0.5)
+                self.assertLess(frames, 100)
+            finally:
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+
     async def test_sustained_speech_triggers_interruption(self):
         instance = satellite.Satellite.__new__(satellite.Satellite)
         instance.mode = "speaking"
